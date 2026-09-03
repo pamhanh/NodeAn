@@ -1,0 +1,13 @@
+# Runtime / personal data — not part of the tool
+config.json
+notes.json
+notes.txt
+images/
+run_error.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
