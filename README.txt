@@ -62,6 +62,12 @@ Features
       "pypdf" package (included in requirements.txt). Old .doc files must
       be re-saved as .docx first
     * Only text is imported, not images or formatting
+- Auto-scroll / teleprompter (the row below the toolbar):
+    * "▶ Tự cuộn" (or Ctrl+Alt+S) starts scrolling the notes upward on
+      its own; press again to stop. It stops automatically at the bottom
+      or as soon as you scroll manually with the wheel
+    * The 🐢———🐇 slider sets the speed from 8 to 260 pixels/second; the
+      chosen speed is saved in notes.json and restored next time
 - Quick find in notes ("🔍 Tìm" button or Ctrl+F):
     * A small search bar appears above the text; type to highlight every
       match as you go

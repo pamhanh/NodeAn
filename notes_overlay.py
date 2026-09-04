@@ -20,6 +20,7 @@ Hotkeys (global, work even when the window isn't focused, via the
     Ctrl+Alt+Down    Decrease opacity (also moves the title-bar slider)
     Ctrl+Alt+=       Increase font size
     Ctrl+Alt+-       Decrease font size
+    Ctrl+Alt+S       Start/stop auto-scroll (teleprompter)
 
 In-window:
     Ctrl+F                 Toggle the quick find-in-notes bar
@@ -30,6 +31,10 @@ In-window:
     Drag the "◢" corner    Resize the window
     "◐" title-bar slider   Adjust transparency of the whole UI (the
                             notes window and the chat window together)
+    Auto-scroll row        "▶ Tự cuộn" starts/stops teleprompter-style
+                            auto-scrolling; the 🐢—🐇 slider sets the
+                            speed (8-260 px/s). Any manual scroll stops
+                            it. The speed is remembered in notes.json.
     Toolbar buttons        A- / A+ font size, insert image from file,
                             paste image from clipboard, import a
                             .txt/.docx/.pdf file, chat with AI, find in
@@ -107,6 +112,12 @@ DEFAULT_FONT_SIZE = 11
 MIN_FONT_SIZE = 7
 MAX_FONT_SIZE = 32
 MAX_IMAGE_WIDTH = 380  # inserted images are scaled down to this width
+
+# Auto-scroll (teleprompter-style), in pixels/second
+DEFAULT_SCROLL_SPEED = 40
+MIN_SCROLL_SPEED = 8
+MAX_SCROLL_SPEED = 260
+SCROLL_TICK_MS = 30
 
 
 def set_capture_exclusion(hwnd, exclude=True):
@@ -213,6 +224,10 @@ class NotesOverlay:
         self._collapsed = False
         self._pre_collapse_geo = None
         self._chat_has_focus = False  # so the global collapse hotkey targets the right window
+        self._autoscroll_on = False
+        self._autoscroll_id = None
+        self._scroll_accum = 0.0
+        self._scroll_speed = DEFAULT_SCROLL_SPEED
 
         self._build_ui()
         self._make_draggable(self.titlebar)
@@ -231,6 +246,8 @@ class NotesOverlay:
                 keyboard.add_hotkey("ctrl+alt+down", lambda: self.change_opacity(-5))
                 keyboard.add_hotkey("ctrl+alt+=", lambda: self.change_font_size(1))
                 keyboard.add_hotkey("ctrl+alt+-", lambda: self.change_font_size(-1))
+                keyboard.add_hotkey("ctrl+alt+s",
+                                    lambda: self.root.after(0, self.toggle_autoscroll))
             except Exception as e:
                 print(f"[notes_overlay] Global hotkeys unavailable: {e}")
 
@@ -280,6 +297,32 @@ class NotesOverlay:
         tbtn("🔍 Tìm", self.toggle_search)
         tbtn("🗑 Xoá hết", self.clear_notes)
 
+        # Auto-scroll (teleprompter) controls — always visible below the toolbar
+        self.scroll_row = tk.Frame(self.root, bg="#242424")
+        self.scroll_row.pack(fill="x")
+        self.autoscroll_btn = tk.Button(
+            self.scroll_row, text="▶ Tự cuộn", bg="#242424", fg="#cccccc", bd=0,
+            activebackground="#3d3d3d", font=("Segoe UI", 9), width=9,
+            command=self.toggle_autoscroll)
+        self.autoscroll_btn.pack(side="left", padx=2, pady=2)
+        tk.Label(self.scroll_row, text="🐢", bg="#242424", fg="#888888",
+                 font=("Segoe UI", 9)).pack(side="left")
+        self.speed_var = tk.IntVar(value=self._scroll_speed)
+        self.speed_var.trace_add("write", lambda *a: self._on_speed_change())
+        self.speed_scale = tk.Scale(
+            self.scroll_row, from_=MIN_SCROLL_SPEED, to=MAX_SCROLL_SPEED,
+            orient="horizontal", variable=self.speed_var, showvalue=False,
+            length=110, width=9, sliderlength=16, bg="#242424", fg="#aaaaaa",
+            troughcolor="#1e1e1e", activebackground="#8ab4ff",
+            highlightthickness=0, bd=0)
+        self.speed_scale.pack(side="left", padx=3)
+        tk.Label(self.scroll_row, text="🐇", bg="#242424", fg="#888888",
+                 font=("Segoe UI", 9)).pack(side="left")
+        self.speed_label = tk.Label(self.scroll_row, text="", bg="#242424",
+                                    fg="#888888", font=("Segoe UI", 8), width=8)
+        self.speed_label.pack(side="left", padx=(4, 0))
+        self._on_speed_change()
+
         # Quick find-in-notes bar (hidden until toggled with the button or Ctrl+F)
         self.search_bar = tk.Frame(self.root, bg="#242424")
         self.search_var = tk.StringVar()
@@ -320,6 +363,11 @@ class NotesOverlay:
         self.text.bind("<Control-v>", self._on_ctrl_v)
         self.text.bind("<Control-f>", lambda e: self.toggle_search())
         self.root.bind("<Control-f>", lambda e: self.toggle_search())
+        # A manual scroll stops auto-scroll so it doesn't fight the user
+        stop_if_running = lambda e: self._autoscroll_on and self._stop_autoscroll()
+        self.text.bind("<MouseWheel>", stop_if_running, add="+")
+        self.text.bind("<Button-4>", stop_if_running, add="+")
+        self.text.bind("<Button-5>", stop_if_running, add="+")
 
         self.text.tag_configure("search_hit", background="#5a4b00")
         self.text.tag_configure("search_current", background="#c58900", foreground="#000000")
@@ -412,6 +460,43 @@ class NotesOverlay:
             self.search_count.configure(text="0/0")
         else:
             self.search_count.configure(text="")
+
+    # ---------------------------------------------- auto-scroll ----
+
+    def _on_speed_change(self):
+        self._scroll_speed = self.speed_var.get()
+        self.speed_label.configure(text=f"{self._scroll_speed} px/s")
+        self._on_change()  # persist the new speed to notes.json
+
+    def toggle_autoscroll(self):
+        if self._autoscroll_on:
+            self._stop_autoscroll()
+        else:
+            self._autoscroll_on = True
+            self._scroll_accum = 0.0
+            self.autoscroll_btn.configure(text="⏸ Dừng")
+            self._autoscroll_step()
+
+    def _stop_autoscroll(self):
+        self._autoscroll_on = False
+        if self._autoscroll_id is not None:
+            self.root.after_cancel(self._autoscroll_id)
+            self._autoscroll_id = None
+        self.autoscroll_btn.configure(text="▶ Tự cuộn")
+
+    def _autoscroll_step(self):
+        self._autoscroll_id = None
+        if not self._autoscroll_on:
+            return
+        self._scroll_accum += self._scroll_speed * (SCROLL_TICK_MS / 1000.0)
+        px = int(self._scroll_accum)
+        if px:
+            self._scroll_accum -= px
+            self.text.yview_scroll(px, "pixels")
+        if self.text.yview()[1] >= 1.0:      # bottom reached — stop
+            self._stop_autoscroll()
+            return
+        self._autoscroll_id = self.root.after(SCROLL_TICK_MS, self._autoscroll_step)
 
     # ------------------------------------------ dragging / resizing ----
 
@@ -573,7 +658,9 @@ class NotesOverlay:
             if buf:
                 segments.append({"type": "text", "value": "".join(buf)})
 
-            data = {"font_size": self.font_size, "segments": segments}
+            data = {"font_size": self.font_size,
+                    "scroll_speed": self._scroll_speed,
+                    "segments": segments}
             with open(NOTES_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
@@ -586,6 +673,10 @@ class NotesOverlay:
                     data = json.load(f)
                 self.font_size = data.get("font_size", DEFAULT_FONT_SIZE)
                 self.text.configure(font=("Segoe UI", self.font_size))
+                speed = data.get("scroll_speed")
+                if isinstance(speed, (int, float)):
+                    self.speed_var.set(int(max(MIN_SCROLL_SPEED,
+                                               min(MAX_SCROLL_SPEED, speed))))
                 for seg in data.get("segments", []):
                     if seg["type"] == "text":
                         self.text.insert("end", seg["value"])
@@ -635,6 +726,7 @@ class NotesOverlay:
         w = self.root.winfo_width()
         if self._collapsed:
             self.toolbar.pack(fill="x", after=self.titlebar)
+            self.scroll_row.pack(fill="x", after=self.toolbar)
             self.body.pack(fill="both", expand=True)
             self.grip.place(relx=1.0, rely=1.0, anchor="se")
             self.root.minsize(240, 180)
@@ -646,9 +738,11 @@ class NotesOverlay:
             self._collapsed = False
         else:
             self._pre_collapse_geo = self.root.geometry()
+            self._stop_autoscroll()
             if self.search_bar.winfo_ismapped():
                 self._hide_search()
             self.body.pack_forget()
+            self.scroll_row.pack_forget()
             self.toolbar.pack_forget()
             self.grip.place_forget()
             self.root.update_idletasks()
