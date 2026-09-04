@@ -51,7 +51,8 @@ image files, or press Ctrl+V to attach an image from the clipboard
 (clipboard paste needs Pillow). As soon as a message includes an image
 the conversation switches to DeepSeek's vision model
 ("deepseek-v4-flash-vision-exp"); PNG/JPEG/GIF/WebP up to 32 MiB each are
-accepted.
+accepted. Ctrl+Alt+H (or the "▁" button) rolls the chat window up to just
+its top row, the same way it works for the notes window.
 """
 
 import base64
@@ -209,6 +210,7 @@ class NotesOverlay:
         self._search_idx = 0
         self._collapsed = False
         self._pre_collapse_geo = None
+        self._chat_has_focus = False  # so the global collapse hotkey targets the right window
 
         self._build_ui()
         self._make_draggable(self.titlebar)
@@ -222,7 +224,7 @@ class NotesOverlay:
         if HAS_KEYBOARD:
             try:
                 keyboard.add_hotkey("ctrl+alt+n", self.toggle_visibility)
-                keyboard.add_hotkey("ctrl+alt+h", self.toggle_collapse)
+                keyboard.add_hotkey("ctrl+alt+h", self._hotkey_collapse)
                 keyboard.add_hotkey("ctrl+alt+up", lambda: self.change_opacity(0.05))
                 keyboard.add_hotkey("ctrl+alt+down", lambda: self.change_opacity(-0.05))
                 keyboard.add_hotkey("ctrl+alt+=", lambda: self.change_font_size(1))
@@ -303,7 +305,6 @@ class NotesOverlay:
         self.text.bind("<Control-v>", self._on_ctrl_v)
         self.text.bind("<Control-f>", lambda e: self.toggle_search())
         self.root.bind("<Control-f>", lambda e: self.toggle_search())
-        self.root.bind("<Control-Alt-h>", lambda e: self.toggle_collapse())
 
         self.text.tag_configure("search_hit", background="#5a4b00")
         self.text.tag_configure("search_current", background="#c58900", foreground="#000000")
@@ -489,7 +490,7 @@ class NotesOverlay:
         if self.chat is not None and self.chat.alive():
             self.chat.lift()
             return
-        self.chat = ChatWindow(self.root, self.exclude_from_capture)
+        self.chat = ChatWindow(self.root, self.exclude_from_capture, owner=self)
 
     # -------------------------------------------------- import file --
 
@@ -603,6 +604,14 @@ class NotesOverlay:
         else:
             self.root.withdraw()
 
+    def _hotkey_collapse(self):
+        # Global Ctrl+Alt+H: collapse the chat window if it's the one in
+        # use, otherwise collapse the notes window.
+        if self._chat_has_focus and self.chat is not None and self.chat.alive():
+            self.chat.toggle_collapse()
+        else:
+            self.toggle_collapse()
+
     def toggle_collapse(self):
         """Roll the window up to just its title bar (and back). Handy for
         parking it in a corner while keeping it grabbable."""
@@ -675,7 +684,8 @@ class ChatWindow:
     Requests run on a background thread so the UI never freezes.
     """
 
-    def __init__(self, master, exclude_fn):
+    def __init__(self, master, exclude_fn, owner=None):
+        self.owner = owner  # NotesOverlay, for routing the global collapse hotkey
         self.win = tk.Toplevel(master)
         self.win.title("Chat AI — DeepSeek")
         self.win.geometry("460x600+480+40")
@@ -687,9 +697,14 @@ class ChatWindow:
         self._busy = False
         self.pending_images = []   # [{"name": str, "data_uri": str, "bytes": int}]
         self.uses_vision = False   # sticky once an image has been sent
+        self._collapsed = False
+        self._pre_collapse_geo = None
 
         self._build_ui()
         self._load_key()
+
+        self.win.bind("<FocusIn>", self._on_focus_in)
+        self.win.bind("<FocusOut>", self._on_focus_out)
 
         self.win.update_idletasks()
         exclude_fn(self.win)
@@ -697,7 +712,7 @@ class ChatWindow:
     # ---------------------------------------------------------- UI ----
 
     def _build_ui(self):
-        top = tk.Frame(self.win, bg="#242424")
+        self.top = top = tk.Frame(self.win, bg="#242424")
         top.pack(fill="x")
         tk.Label(top, text="API key", bg="#242424", fg="#cccccc",
                  font=("Segoe UI", 9)).pack(side="left", padx=(8, 4), pady=6)
@@ -709,8 +724,12 @@ class ChatWindow:
         tk.Button(top, text="Lưu", bg="#242424", fg="#cccccc", bd=0,
                   activebackground="#3d3d3d", font=("Segoe UI", 9),
                   command=self._save_key).pack(side="left", padx=6)
+        self.collapse_btn = tk.Button(top, text="▁", bg="#242424", fg="#cccccc", bd=0,
+                                      activebackground="#3d3d3d", font=("Segoe UI", 9),
+                                      command=self.toggle_collapse)
+        self.collapse_btn.pack(side="left", padx=(0, 6))
 
-        body = tk.Frame(self.win, bg="#1e1e1e")
+        self.body = body = tk.Frame(self.win, bg="#1e1e1e")
         body.pack(fill="both", expand=True)
         scrollbar = tk.Scrollbar(body)
         scrollbar.pack(side="right", fill="y")
@@ -723,7 +742,7 @@ class ChatWindow:
         self.log.tag_configure("ai", foreground="#8ae28a", font=("Segoe UI", 10, "bold"))
         self.log.tag_configure("sys", foreground="#e0a35a", font=("Segoe UI", 9, "italic"))
 
-        bottom = tk.Frame(self.win, bg="#242424")
+        self.bottom = bottom = tk.Frame(self.win, bg="#242424")
         bottom.pack(fill="x")
 
         attach_row = tk.Frame(bottom, bg="#242424")
@@ -847,6 +866,38 @@ class ChatWindow:
         self.win.deiconify()
         self.win.lift()
         self.win.focus_force()
+
+    def _on_focus_in(self, event):
+        if self.owner is not None:
+            self.owner._chat_has_focus = True
+
+    def _on_focus_out(self, event):
+        if self.owner is not None:
+            self.owner._chat_has_focus = False
+
+    def toggle_collapse(self):
+        """Roll the chat window up to just the API-key row (and back),
+        keeping its position. Ctrl+Alt+H or the "▁" button."""
+        x, y = self.win.winfo_x(), self.win.winfo_y()
+        w = self.win.winfo_width()
+        if self._collapsed:
+            self.body.pack(fill="both", expand=True)
+            self.bottom.pack(fill="x")
+            self.win.minsize(320, 320)
+            size = (self._pre_collapse_geo or f"{w}x600").split("+")[0]
+            self.win.geometry(f"{size}+{x}+{y}")
+            self.collapse_btn.configure(text="▁")
+            self._collapsed = False
+        else:
+            self._pre_collapse_geo = self.win.geometry()
+            self.body.pack_forget()
+            self.bottom.pack_forget()
+            self.win.update_idletasks()
+            h = max(self.top.winfo_reqheight(), 26)
+            self.win.minsize(320, h)
+            self.win.geometry(f"{w}x{h}+{x}+{y}")
+            self.collapse_btn.configure(text="🗖")
+            self._collapsed = True
 
     def _append(self, tag, label, text):
         self.log.configure(state="normal")

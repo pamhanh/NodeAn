@@ -53,6 +53,8 @@ Features
       DeepSeek's vision model (deepseek-v4-flash-vision-exp), which is
       billed separately; text-only chats use deepseek-chat
     * Uses only the Python standard library — no extra install needed
+    * Ctrl+Alt+H (or the "▁" button) rolls the chat window up to just its
+      top row, and back — same as the notes window
 - Import a document ("📥 Import" button):
     * Reads a .txt / .md, .docx (Word) or .pdf file and appends its text
       into the notes at the cursor, under a "===== filename =====" header
