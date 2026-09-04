@@ -16,8 +16,8 @@ Hotkeys (global, work even when the window isn't focused, via the
 `keyboard` package):
     Ctrl+Alt+N       Show/hide the notes window
     Ctrl+Alt+H       Collapse/expand (roll the window up to its title bar)
-    Ctrl+Alt+Up      Increase window opacity
-    Ctrl+Alt+Down    Decrease window opacity
+    Ctrl+Alt+Up      Increase opacity (also moves the title-bar slider)
+    Ctrl+Alt+Down    Decrease opacity (also moves the title-bar slider)
     Ctrl+Alt+=       Increase font size
     Ctrl+Alt+-       Decrease font size
 
@@ -28,6 +28,8 @@ In-window:
                             one, otherwise pastes text as usual)
     Drag the title bar     Move the window
     Drag the "◢" corner    Resize the window
+    "◐" title-bar slider   Adjust transparency of the whole UI (the
+                            notes window and the chat window together)
     Toolbar buttons        A- / A+ font size, insert image from file,
                             paste image from clipboard, import a
                             .txt/.docx/.pdf file, chat with AI, find in
@@ -225,8 +227,8 @@ class NotesOverlay:
             try:
                 keyboard.add_hotkey("ctrl+alt+n", self.toggle_visibility)
                 keyboard.add_hotkey("ctrl+alt+h", self._hotkey_collapse)
-                keyboard.add_hotkey("ctrl+alt+up", lambda: self.change_opacity(0.05))
-                keyboard.add_hotkey("ctrl+alt+down", lambda: self.change_opacity(-0.05))
+                keyboard.add_hotkey("ctrl+alt+up", lambda: self.change_opacity(5))
+                keyboard.add_hotkey("ctrl+alt+down", lambda: self.change_opacity(-5))
                 keyboard.add_hotkey("ctrl+alt+=", lambda: self.change_font_size(1))
                 keyboard.add_hotkey("ctrl+alt+-", lambda: self.change_font_size(-1))
             except Exception as e:
@@ -246,6 +248,19 @@ class NotesOverlay:
         self.collapse_btn = tk.Button(self.titlebar, text="▁", bg="#2d2d2d", fg="#aaaaaa", bd=0,
                                       activebackground="#3d3d3d", command=self.toggle_collapse)
         self.collapse_btn.pack(side="right", padx=0)
+
+        # Whole-UI transparency slider (also driven by Ctrl+Alt+Up/Down)
+        self.opacity_var = tk.IntVar(value=int(round(self.root.attributes("-alpha") * 100)))
+        self.opacity_var.trace_add("write", lambda *a: self._apply_opacity(self.opacity_var.get()))
+        self.opacity_scale = tk.Scale(
+            self.titlebar, from_=25, to=100, orient="horizontal",
+            variable=self.opacity_var,
+            showvalue=False, length=80, width=9, sliderlength=16,
+            bg="#2d2d2d", fg="#aaaaaa", troughcolor="#1e1e1e",
+            activebackground="#8ab4ff", highlightthickness=0, bd=0)
+        self.opacity_scale.pack(side="right", padx=(4, 6))
+        tk.Label(self.titlebar, text="◐", bg="#2d2d2d", fg="#888888",
+                 font=("Segoe UI", 9)).pack(side="right")
 
         self.toolbar = tk.Frame(self.root, bg="#242424", height=26)
         self.toolbar.pack(fill="x")
@@ -491,6 +506,7 @@ class NotesOverlay:
             self.chat.lift()
             return
         self.chat = ChatWindow(self.root, self.exclude_from_capture, owner=self)
+        self._apply_opacity(self.opacity_var.get())
 
     # -------------------------------------------------- import file --
 
@@ -642,10 +658,19 @@ class NotesOverlay:
             self.collapse_btn.configure(text="🗖")
             self._collapsed = True
 
-    def change_opacity(self, delta):
-        current = self.root.attributes("-alpha")
-        new_val = min(1.0, max(0.2, current + delta))
-        self.root.attributes("-alpha", new_val)
+    def change_opacity(self, delta_percent):
+        """Nudge the transparency slider by delta_percent points. Setting
+        the linked variable moves the Scale and applies the new alpha."""
+        self.opacity_var.set(max(25, min(100, self.opacity_var.get() + delta_percent)))
+
+    def _apply_opacity(self, pct):
+        alpha = max(0.25, min(1.0, pct / 100))
+        self.root.attributes("-alpha", alpha)
+        if self.chat is not None and self.chat.alive():
+            try:
+                self.chat.win.attributes("-alpha", alpha)
+            except tk.TclError:
+                pass
 
     def _apply_capture_exclusion(self):
         hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id()) if sys.platform == "win32" else None

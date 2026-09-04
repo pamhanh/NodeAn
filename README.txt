@@ -71,7 +71,10 @@ Features
 - Resizable window: drag the "◢" handle in the bottom-right corner
 - Movable window: drag the title bar
 - "🗑 Xoá hết" button clears all notes and images (asks for confirmation)
-- Adjustable transparency: Ctrl+Alt+Up / Ctrl+Alt+Down
+- Adjustable transparency:
+    * The "◐" slider in the title bar sets the opacity of the whole UI
+      (the notes window and, if open, the chat window move together)
+    * Ctrl+Alt+Up / Ctrl+Alt+Down nudge the same slider (25%-100%)
 - Show/hide: Ctrl+Alt+N (works even when the window isn't focused)
 - Collapse/expand: Ctrl+Alt+H, or the "▁" button in the title bar --
   rolls the window up to just its title bar so it takes almost no space,
