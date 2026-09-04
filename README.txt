@@ -71,6 +71,9 @@ Features
 - "🗑 Xoá hết" button clears all notes and images (asks for confirmation)
 - Adjustable transparency: Ctrl+Alt+Up / Ctrl+Alt+Down
 - Show/hide: Ctrl+Alt+N (works even when the window isn't focused)
+- Collapse/expand: Ctrl+Alt+H, or the "▁" button in the title bar --
+  rolls the window up to just its title bar so it takes almost no space,
+  press again to restore it to its previous size
 
 All global hotkeys need the optional "keyboard" package (included in
 requirements.txt); image support needs "Pillow" and PDF import needs

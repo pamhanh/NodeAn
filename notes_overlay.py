@@ -15,6 +15,7 @@ Usage:
 Hotkeys (global, work even when the window isn't focused, via the
 `keyboard` package):
     Ctrl+Alt+N       Show/hide the notes window
+    Ctrl+Alt+H       Collapse/expand (roll the window up to its title bar)
     Ctrl+Alt+Up      Increase window opacity
     Ctrl+Alt+Down    Decrease window opacity
     Ctrl+Alt+=       Increase font size
@@ -206,6 +207,8 @@ class NotesOverlay:
         self.chat = None          # ChatWindow instance, created on demand
         self._search_matches = [] # [(start_index, end_index), ...]
         self._search_idx = 0
+        self._collapsed = False
+        self._pre_collapse_geo = None
 
         self._build_ui()
         self._make_draggable(self.titlebar)
@@ -219,6 +222,7 @@ class NotesOverlay:
         if HAS_KEYBOARD:
             try:
                 keyboard.add_hotkey("ctrl+alt+n", self.toggle_visibility)
+                keyboard.add_hotkey("ctrl+alt+h", self.toggle_collapse)
                 keyboard.add_hotkey("ctrl+alt+up", lambda: self.change_opacity(0.05))
                 keyboard.add_hotkey("ctrl+alt+down", lambda: self.change_opacity(-0.05))
                 keyboard.add_hotkey("ctrl+alt+=", lambda: self.change_font_size(1))
@@ -237,6 +241,9 @@ class NotesOverlay:
                  font=("Segoe UI", 9)).pack(side="left", padx=8)
         tk.Button(self.titlebar, text="✕", bg="#2d2d2d", fg="#aaaaaa", bd=0,
                   activebackground="#3d3d3d", command=self.on_close).pack(side="right", padx=4)
+        self.collapse_btn = tk.Button(self.titlebar, text="▁", bg="#2d2d2d", fg="#aaaaaa", bd=0,
+                                      activebackground="#3d3d3d", command=self.toggle_collapse)
+        self.collapse_btn.pack(side="right", padx=0)
 
         self.toolbar = tk.Frame(self.root, bg="#242424", height=26)
         self.toolbar.pack(fill="x")
@@ -277,13 +284,13 @@ class NotesOverlay:
         self.search_entry.bind("<Shift-Return>", lambda e: self._search_step(-1))
         self.search_entry.bind("<Escape>", lambda e: self._hide_search())
 
-        body = tk.Frame(self.root, bg="#1e1e1e")
-        body.pack(fill="both", expand=True)
+        self.body = tk.Frame(self.root, bg="#1e1e1e")
+        self.body.pack(fill="both", expand=True)
 
-        self.scrollbar = tk.Scrollbar(body)
+        self.scrollbar = tk.Scrollbar(self.body)
         self.scrollbar.pack(side="right", fill="y")
 
-        self.text = tk.Text(body, bg="#1e1e1e", fg="#e0e0e0", insertbackground="#ffffff",
+        self.text = tk.Text(self.body, bg="#1e1e1e", fg="#e0e0e0", insertbackground="#ffffff",
                              font=("Segoe UI", self.font_size), wrap="word", bd=0, padx=10, pady=10,
                              undo=True, yscrollcommand=self.scrollbar.set)
         self.text.pack(side="left", fill="both", expand=True)
@@ -296,6 +303,7 @@ class NotesOverlay:
         self.text.bind("<Control-v>", self._on_ctrl_v)
         self.text.bind("<Control-f>", lambda e: self.toggle_search())
         self.root.bind("<Control-f>", lambda e: self.toggle_search())
+        self.root.bind("<Control-Alt-h>", lambda e: self.toggle_collapse())
 
         self.text.tag_configure("search_hit", background="#5a4b00")
         self.text.tag_configure("search_current", background="#c58900", foreground="#000000")
@@ -594,6 +602,36 @@ class NotesOverlay:
             self.root.deiconify()
         else:
             self.root.withdraw()
+
+    def toggle_collapse(self):
+        """Roll the window up to just its title bar (and back). Handy for
+        parking it in a corner while keeping it grabbable."""
+        x, y = self.root.winfo_x(), self.root.winfo_y()
+        w = self.root.winfo_width()
+        if self._collapsed:
+            self.toolbar.pack(fill="x", after=self.titlebar)
+            self.body.pack(fill="both", expand=True)
+            self.grip.place(relx=1.0, rely=1.0, anchor="se")
+            self.root.minsize(240, 180)
+            geo = self._pre_collapse_geo or f"{w}x560+{x}+{y}"
+            # keep the current on-screen position, restore only the size
+            size = geo.split("+")[0]
+            self.root.geometry(f"{size}+{x}+{y}")
+            self.collapse_btn.configure(text="▁")
+            self._collapsed = False
+        else:
+            self._pre_collapse_geo = self.root.geometry()
+            if self.search_bar.winfo_ismapped():
+                self._hide_search()
+            self.body.pack_forget()
+            self.toolbar.pack_forget()
+            self.grip.place_forget()
+            self.root.update_idletasks()
+            h = max(self.titlebar.winfo_reqheight(), 26)
+            self.root.minsize(240, h)
+            self.root.geometry(f"{w}x{h}+{x}+{y}")
+            self.collapse_btn.configure(text="🗖")
+            self._collapsed = True
 
     def change_opacity(self, delta):
         current = self.root.attributes("-alpha")
